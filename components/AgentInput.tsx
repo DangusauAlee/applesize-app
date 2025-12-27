@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { parseAgentText, createListing } from '../services/mockService';
 import { Listing, Condition } from '../types';
@@ -7,17 +8,31 @@ export const AgentInput: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) =
   const [rawText, setRawText] = useState('');
   const [parsedData, setParsedData] = useState<Partial<Listing> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isParsing, setIsParsing] = useState(false);
 
-  const handleParse = () => {
-    const result = parseAgentText(rawText);
-    setParsedData(result);
+  // Fix: handleParse updated to be async to handle the promise from parseAgentText
+  const handleParse = async () => {
+    if (!rawText.trim()) return;
+    setIsParsing(true);
+    try {
+      const result = await parseAgentText(rawText);
+      setParsedData(result);
+    } catch (error) {
+      console.error("Error parsing text:", error);
+    } finally {
+      setIsParsing(false);
+    }
   };
 
   const handleSubmit = async () => {
     if (!parsedData) return;
     setLoading(true);
     // Add default mock location/condition if missing
-    await createListing({ ...parsedData, condition: [Condition.CLEAN], location: 'Ikeja, Lagos' });
+    await createListing({ 
+      ...parsedData, 
+      condition: (parsedData.condition as any) || [Condition.CLEAN], 
+      location: 'Ikeja, Lagos' 
+    });
     setLoading(false);
     setRawText('');
     setParsedData(null);
@@ -40,11 +55,12 @@ export const AgentInput: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) =
             onChange={(e) => setRawText(e.target.value)}
           />
           <button 
-            disabled={!rawText.trim()}
+            disabled={!rawText.trim() || isParsing}
             onClick={handleParse}
-            className="w-full py-3 bg-primary-900 text-white rounded-xl font-semibold disabled:opacity-50"
+            className="w-full py-3 bg-primary-900 text-white rounded-xl font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            Parse Listing
+            {isParsing && <Loader2 size={18} className="animate-spin" />}
+            {isParsing ? 'Parsing...' : 'Parse Listing'}
           </button>
         </div>
       ) : (

@@ -1,13 +1,13 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { ArrowLeft, Share2, Heart, Battery, MapPin, MessageCircle, Phone, Smartphone, ScanFace, Eye, Cpu, Zap, Send, AlertCircle } from 'lucide-react';
-import { getListingById, sendMessage } from '../services/mockService';
+import { ArrowLeft, Share2, Heart, Battery, MapPin, MessageCircle, Phone, Smartphone, ScanFace, Eye, Cpu, Zap, Send, AlertCircle, Loader2 } from 'lucide-react';
+import { getListingById, sendMessage, getOrCreateChat } from '../services/mockService';
 import { Listing, Condition } from '../types';
 import { MOCK_USER } from '../constants';
 
 interface ListingDetailProps {
   id: string;
   onBack: () => void;
-  onChat: (listingId: string) => void;
+  onChat: (chatId: string) => void;
 }
 
 export const ListingDetail: React.FC<ListingDetailProps> = ({ id, onBack, onChat }) => {
@@ -15,20 +15,29 @@ export const ListingDetail: React.FC<ListingDetailProps> = ({ id, onBack, onChat
   const [showOfferModal, setShowOfferModal] = useState(false);
   const [offerAmount, setOfferAmount] = useState('');
   const [sendingOffer, setSendingOffer] = useState(false);
+  const [loadingChat, setLoadingChat] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     getListingById(id).then(setListing);
   }, [id]);
 
-  const handleMakeOffer = async () => {
-    if (!listing || !offerAmount) return;
-    setSendingOffer(true);
-    // Send offer as a special message type to the chat
-    await sendMessage('chat_1', `I am offering ₦${Number(offerAmount).toLocaleString()}`, MOCK_USER.id, 'offer', Number(offerAmount));
-    setSendingOffer(false);
-    setShowOfferModal(false);
-    onChat(listing.id); // Go to chat to see the offer
+  const handleStartChat = async (withOffer?: boolean) => {
+    if (!listing) return;
+    setLoadingChat(true);
+    
+    // Create or retrieve chat session
+    const chatId = await getOrCreateChat(listing.id, MOCK_USER.id, listing.sellerId, listing.model);
+    
+    if (withOffer && offerAmount) {
+      setSendingOffer(true);
+      await sendMessage(chatId, `I am offering ₦${Number(offerAmount).toLocaleString()}`, MOCK_USER.id, 'offer', Number(offerAmount));
+      setSendingOffer(false);
+      setShowOfferModal(false);
+    }
+
+    setLoadingChat(false);
+    onChat(chatId);
   };
 
   if (!listing) return <div className="h-screen flex items-center justify-center bg-cream-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-900"></div></div>;
@@ -147,17 +156,19 @@ export const ListingDetail: React.FC<ListingDetailProps> = ({ id, onBack, onChat
         {listing.isQuickSale ? (
            <button 
              onClick={() => setShowOfferModal(true)}
-             className="flex-1 bg-red-600 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-red-700 shadow-lg shadow-red-600/20"
+             disabled={loadingChat}
+             className="flex-1 bg-red-600 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-red-700 shadow-lg shadow-red-600/20 disabled:opacity-70"
            >
-             <Zap size={20} fill="currentColor" />
+             {loadingChat ? <Loader2 className="animate-spin"/> : <Zap size={20} fill="currentColor" />}
              Make Offer
            </button>
         ) : (
            <button 
-             onClick={() => onChat(listing.id)}
-             className="flex-1 bg-primary-900 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-primary-800"
+             onClick={() => handleStartChat(false)}
+             disabled={loadingChat}
+             className="flex-1 bg-primary-900 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-primary-800 disabled:opacity-70"
            >
-             <MessageCircle size={20} />
+             {loadingChat ? <Loader2 className="animate-spin"/> : <MessageCircle size={20} />}
              Chat
            </button>
         )}
@@ -192,7 +203,7 @@ export const ListingDetail: React.FC<ListingDetailProps> = ({ id, onBack, onChat
                    Cancel
                  </button>
                  <button 
-                   onClick={handleMakeOffer}
+                   onClick={() => handleStartChat(true)}
                    disabled={!offerAmount || sendingOffer}
                    className="flex-1 py-4 bg-primary-900 text-white font-bold rounded-xl shadow-lg shadow-primary-900/20 flex items-center justify-center gap-2"
                  >

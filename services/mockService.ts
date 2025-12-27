@@ -1,10 +1,16 @@
+
 import { Listing, User, UserRole, Condition, ChatSession, ChatMessage, Region, SimStatus, ProductCategory } from '../types';
 import { LISTING_IMAGES, LISTING_VIDEOS, MOCK_USER, ALL_MODELS, MODELS_BY_CATEGORY } from '../constants';
+import { GoogleGenAI, Type } from "@google/genai";
 
-// --- MOCK DATABASE STATE ---
-const conditions = [Condition.DM, Condition.DDM, Condition.BM, Condition.CM, Condition.OFF_ID, Condition.BACK_CRACK, Condition.SCREEN_CRACK, Condition.CLEAN];
+// --- IN-MEMORY STATE ---
+let authorizedUsers: User[] = [
+  { ...MOCK_USER }
+];
 
-let listings: Listing[] = Array.from({ length: 30 }).map((_, i) => {
+let currentUser: User | null = null;
+
+let listings: Listing[] = Array.from({ length: 15 }).map((_, i) => {
   const isDemand = i % 4 === 0; 
   const isQuickSale = !isDemand && i % 5 === 0;
   
@@ -12,8 +18,8 @@ let listings: Listing[] = Array.from({ length: 30 }).map((_, i) => {
   const models = MODELS_BY_CATEGORY[category];
   const model = models[i % models.length];
 
-  // Randomly assign 1 or 2 conditions
   const hasMultipleConditions = i % 3 === 0;
+  const conditions = [Condition.DM, Condition.DDM, Condition.BM, Condition.CM, Condition.OFF_ID, Condition.BACK_CRACK, Condition.SCREEN_CRACK, Condition.CLEAN];
   const itemConditions = hasMultipleConditions 
     ? [conditions[i % conditions.length], conditions[(i + 1) % conditions.length]]
     : [conditions[i % conditions.length]];
@@ -39,8 +45,8 @@ let listings: Listing[] = Array.from({ length: 30 }).map((_, i) => {
       : `Selling ${model}. Condition: ${itemConditions.join(', ')}.`,
     images: isDemand ? [] : [LISTING_IMAGES[i % 3]],
     videoUrl: !isDemand ? LISTING_VIDEOS[i % 3] : undefined,
-    sellerId: i < 5 ? MOCK_USER.id : 'seller_2',
-    sellerName: i < 5 ? MOCK_USER.name : 'Emeka Phones Ltd',
+    sellerId: i < 3 ? authorizedUsers[0].id : `seller_${i}`,
+    sellerName: i < 3 ? authorizedUsers[0].name : 'Emeka Phones Ltd',
     sellerPhone: '+234 811 000 0000',
     sellerVerified: true,
     location: 'Ikeja, Lagos',
@@ -50,213 +56,223 @@ let listings: Listing[] = Array.from({ length: 30 }).map((_, i) => {
   };
 });
 
-let chats: ChatSession[] = [
-  {
-    id: 'chat_1',
-    listingId: 'lst_1',
-    listingModel: 'iPhone 15 Pro',
-    buyerId: 'buyer_1',
-    sellerId: MOCK_USER.id,
-    lastMessage: 'Is this still available?',
-    lastUpdated: Date.now() - 50000,
-    unreadCount: 2
-  }
-];
+let chatSessions: ChatSession[] = [];
+let messagesByChat: Record<string, ChatMessage[]> = {};
 
-let messages: Record<string, ChatMessage[]> = {
-  'chat_1': [
-    { id: 'm1', text: 'Hello, I saw your iPhone 15 Pro.', senderId: 'buyer_1', timestamp: Date.now() - 100000, type: 'text' },
-    { id: 'm2', text: 'Is this still available?', senderId: 'buyer_1', timestamp: Date.now() - 90000, type: 'text' }
-  ]
+// --- AUTH SERVICES ---
+
+export const checkAuth = async (phone: string): Promise<User | null> => {
+  await delay(800);
+  const normalizedInput = phone.replace(/\D/g, '');
+  const user = authorizedUsers.find(u => u.phone.replace(/\D/g, '') === normalizedInput);
+  if (user) {
+    currentUser = user;
+    return user;
+  }
+  return null;
 };
 
-// --- SERVICE METHODS ---
+export const registerPendingUser = async (userData: Partial<User>): Promise<void> => {
+  await delay(1000);
+  console.log("Pending registration for:", userData);
+};
 
-export interface FilterOptions {
-  category?: ProductCategory | 'All';
-  minPrice?: number;
-  maxPrice?: number;
-  sortBy?: 'newest' | 'price_asc' | 'price_desc';
-  conditions?: Condition[];
-  regions?: Region[];
-  storage?: string[];
-}
+export const getCurrentUser = () => currentUser || authorizedUsers[0];
+
+export const updateCurrentUser = (data: Partial<User>) => {
+  if (currentUser) {
+    currentUser = { ...currentUser, ...data };
+    return currentUser;
+  }
+  return authorizedUsers[0];
+};
+
+export const getTotalUnreadCount = () => {
+  return chatSessions.reduce((acc, session) => acc + session.unreadCount, 0);
+};
+
+// --- LISTING SERVICES ---
 
 export const getListings = async (
   query?: string, 
   tab: 'supply' | 'demand' | 'quicksale' = 'supply',
-  filters?: FilterOptions
+  filters?: any
 ): Promise<Listing[]> => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      let result = listings.filter(l => l.status === 'active');
-      
-      // Tab Filtering
-      if (tab === 'quicksale') {
-        // Quick sales ONLY
-        result = result.filter(l => l.isQuickSale && l.type === 'supply');
-      } else if (tab === 'demand') {
-        // Demand ONLY
-        result = result.filter(l => l.type === 'demand');
-      } else {
-        // Supply Tab: Regular supply ONLY (No quick sales)
-        result = result.filter(l => l.type === 'supply' && !l.isQuickSale);
-      }
+  await delay(200);
+  let result = [...listings].filter(l => l.status === 'active');
+  
+  if (tab === 'quicksale') {
+    result = result.filter(l => l.isQuickSale && l.type === 'supply');
+  } else if (tab === 'demand') {
+    result = result.filter(l => l.type === 'demand');
+  } else {
+    result = result.filter(l => l.type === 'supply' && !l.isQuickSale);
+  }
 
-      // Search Filter
-      if (query) {
-        const lower = query.toLowerCase();
-        result = result.filter(l => 
-          l.model.toLowerCase().includes(lower) || 
-          l.location.toLowerCase().includes(lower)
-        );
-      }
+  if (query) {
+    const lower = query.toLowerCase();
+    result = result.filter(l => 
+      l.model.toLowerCase().includes(lower) || 
+      l.location.toLowerCase().includes(lower)
+    );
+  }
 
-      // Advanced Filters
-      if (filters) {
-        if (filters.minPrice !== undefined) {
-          result = result.filter(l => l.price >= filters.minPrice!);
-        }
-        if (filters.maxPrice !== undefined && filters.maxPrice > 0) {
-          result = result.filter(l => l.price <= filters.maxPrice!);
-        }
-        
-        // Condition Filter (Array overlap logic)
-        if (filters.conditions && filters.conditions.length > 0) {
-          result = result.filter(l => 
-            // Check if ANY of the listing's conditions match ANY of the selected filter conditions
-            l.condition.some(c => filters.conditions?.includes(c))
-          );
-        }
-
-        // Region Filter
-        if (filters.regions && filters.regions.length > 0) {
-          result = result.filter(l => filters.regions?.includes(l.region));
-        }
-
-        // Storage Filter
-        if (filters.storage && filters.storage.length > 0) {
-          result = result.filter(l => filters.storage?.includes(l.storage));
-        }
-        
-        // Sort
-        if (filters.sortBy) {
-          if (filters.sortBy === 'newest') {
-            result.sort((a, b) => b.createdAt - a.createdAt);
-          } else if (filters.sortBy === 'price_asc') {
-            result.sort((a, b) => a.price - b.price);
-          } else if (filters.sortBy === 'price_desc') {
-            result.sort((a, b) => b.price - a.price);
-          }
-        }
-      }
-
-      resolve(result);
-    }, 400);
-  });
+  return result;
 };
 
 export const deleteListing = async (id: string): Promise<boolean> => {
-  return new Promise(resolve => {
-    setTimeout(() => {
-      listings = listings.filter(l => l.id !== id);
-      resolve(true);
-    }, 500);
-  });
+  listings = listings.filter(l => l.id !== id);
+  return true;
 };
 
 export const getSearchSuggestions = async (query: string): Promise<string[]> => {
   if (!query) return [];
-  return new Promise((resolve) => {
-    const lower = query.toLowerCase();
-    const matches = ALL_MODELS.filter(m => m.toLowerCase().includes(lower));
-    resolve(matches.slice(0, 5));
-  });
+  const lower = query.toLowerCase();
+  return ALL_MODELS.filter(m => m.toLowerCase().includes(lower)).slice(0, 5);
 };
 
 export const getListingById = async (id: string): Promise<Listing | undefined> => {
-  return new Promise(resolve => setTimeout(() => resolve(listings.find(l => l.id === id)), 300));
+  return listings.find(l => l.id === id);
 };
 
 export const createListing = async (listingData: Partial<Listing>): Promise<Listing> => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      // Ensure condition is always an array
-      const conditions = Array.isArray(listingData.condition) 
-        ? listingData.condition 
-        : [listingData.condition || Condition.CLEAN];
-
-      const newListing: Listing = {
-        id: `lst_${Date.now()}`,
-        type: listingData.type || 'supply',
-        category: 'iPhone',
-        isQuickSale: listingData.isQuickSale || false,
-        allowOffers: listingData.allowOffers || false,
-        brand: 'Apple',
-        model: listingData.model || 'Unknown Model',
-        storage: listingData.storage || '128GB',
-        condition: conditions,
-        region: listingData.region || 'UK',
-        simStatus: listingData.simStatus || 'Physical Sim',
-        price: listingData.price || 0,
-        currency: '₦',
-        batteryHealth: listingData.batteryHealth || 100,
-        color: listingData.color || 'Black',
-        description: listingData.description || '',
-        images: listingData.images || [],
-        videoUrl: listingData.videoUrl,
-        sellerId: MOCK_USER.id,
-        sellerName: MOCK_USER.name,
-        sellerPhone: MOCK_USER.phone,
-        sellerVerified: MOCK_USER.isVerified,
-        location: MOCK_USER.location,
-        createdAt: Date.now(),
-        status: 'active',
-        offers: []
-      };
-      listings = [newListing, ...listings];
-      resolve(newListing);
-    }, 800);
-  });
+  await delay(300);
+  const user = getCurrentUser();
+  const newListing: Listing = {
+    id: `lst_${Date.now()}`,
+    type: listingData.type || 'supply',
+    category: 'iPhone',
+    isQuickSale: listingData.isQuickSale || false,
+    allowOffers: listingData.allowOffers || false,
+    brand: 'Apple',
+    model: listingData.model || 'Unknown Model',
+    storage: listingData.storage || '128GB',
+    condition: listingData.condition || [Condition.CLEAN],
+    region: listingData.region || 'UK',
+    simStatus: listingData.simStatus || 'Physical Sim',
+    price: listingData.price || 0,
+    currency: '₦',
+    batteryHealth: listingData.batteryHealth || 100,
+    color: listingData.color || 'Black',
+    description: listingData.description || '',
+    images: listingData.images || [],
+    videoUrl: listingData.videoUrl,
+    sellerId: user.id,
+    sellerName: user.name,
+    sellerPhone: user.phone,
+    sellerVerified: user.isVerified,
+    location: user.location,
+    createdAt: Date.now(),
+    status: 'active',
+    offers: []
+  };
+  
+  listings.unshift(newListing);
+  return newListing;
 };
 
 export const getChats = async (): Promise<ChatSession[]> => {
-  return new Promise(resolve => setTimeout(() => resolve(chats), 400));
+  const user = getCurrentUser();
+  return chatSessions.filter(c => c.buyerId === user.id || c.sellerId === user.id)
+    .sort((a,b) => b.lastUpdated - a.lastUpdated);
+};
+
+export const getOrCreateChat = async (listingId: string, buyerId: string, sellerId: string, modelName: string): Promise<string> => {
+  const existing = chatSessions.find(c => c.listingId === listingId && c.buyerId === buyerId);
+  if (existing) return existing.id;
+
+  const newChat: ChatSession = {
+    id: `chat_${Date.now()}`,
+    listingId,
+    listingModel: modelName,
+    buyerId,
+    sellerId,
+    lastMessage: 'Chat started',
+    lastUpdated: Date.now(),
+    unreadCount: 0
+  };
+
+  chatSessions.push(newChat);
+  return newChat.id;
 };
 
 export const getMessages = async (chatId: string): Promise<ChatMessage[]> => {
-  return new Promise(resolve => setTimeout(() => resolve(messages[chatId] || []), 300));
+  return messagesByChat[chatId] || [];
 };
 
-export const sendMessage = async (chatId: string, content: string, senderId: string, type: 'text' | 'image' | 'sticker' | 'offer' = 'text', offerAmount?: number): Promise<ChatMessage> => {
-  return new Promise(resolve => {
-    const msg: ChatMessage = {
-      id: `msg_${Date.now()}`,
-      senderId,
-      timestamp: Date.now(),
-      type: type,
-      text: type === 'text' ? content : undefined,
-      imageUrl: type === 'image' ? content : undefined,
-      stickerUrl: type === 'sticker' ? content : undefined,
-      offerAmount: offerAmount
-    };
-    if (!messages[chatId]) messages[chatId] = [];
-    messages[chatId].push(msg);
-    resolve(msg);
-  });
-};
-
-export const parseAgentText = (text: string): Partial<Listing> | null => {
-  if (!text) return null;
-  const lower = text.toLowerCase();
-  
-  // Find model
-  const model = ALL_MODELS.find(m => lower.includes(m.toLowerCase()));
-  
-  if (!model) return null;
-
-  return {
-    model,
-    description: text
+export const sendMessage = async (
+  chatId: string, 
+  content: string, 
+  senderId: string, 
+  type: 'text' | 'image' | 'sticker' | 'offer' | 'audio' = 'text', 
+  offerAmount?: number
+): Promise<ChatMessage> => {
+  const msg: ChatMessage = {
+    id: `msg_${Date.now()}`,
+    senderId,
+    timestamp: Date.now(),
+    type,
+    text: type === 'text' || type === 'offer' ? content : undefined,
+    imageUrl: type === 'image' ? content : undefined,
+    stickerUrl: type === 'sticker' ? content : undefined,
+    audioUrl: type === 'audio' ? content : undefined,
+    offerAmount,
+    offerStatus: type === 'offer' ? 'pending' : undefined
   };
+
+  if (!messagesByChat[chatId]) messagesByChat[chatId] = [];
+  messagesByChat[chatId].push(msg);
+
+  const session = chatSessions.find(c => c.id === chatId);
+  if (session) {
+    session.lastMessage = type === 'audio' ? '🎤 Voice Message' : (type === 'image' ? '🖼️ Photo' : content);
+    session.lastUpdated = Date.now();
+  }
+
+  return msg;
 };
+
+export const respondToOffer = async (chatId: string, messageId: string, status: 'accepted' | 'rejected'): Promise<boolean> => {
+  const messages = messagesByChat[chatId];
+  if (!messages) return false;
+  const msgIndex = messages.findIndex(m => m.id === messageId);
+  if (msgIndex === -1) return false;
+  messages[msgIndex].offerStatus = status;
+  return true;
+};
+
+export const parseAgentText = async (text: string): Promise<Partial<Listing>> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Extract iPhone details from this WhatsApp text: "${text}"`,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          model: { type: Type.STRING },
+          price: { type: Type.NUMBER },
+          storage: { type: Type.STRING },
+          color: { type: Type.STRING },
+          batteryHealth: { type: Type.NUMBER },
+          condition: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING } 
+          }
+        },
+        required: ['model', 'price']
+      }
+    }
+  });
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    console.error("Failed to parse agent text", e);
+    return {};
+  }
+};
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

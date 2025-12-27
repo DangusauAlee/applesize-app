@@ -1,3 +1,5 @@
+
+
 export enum UserRole {
   USER = 'USER',
   ADMIN = 'ADMIN'
@@ -77,11 +79,13 @@ export interface ChatMessage {
   text?: string;
   imageUrl?: string;
   stickerUrl?: string;
+  audioUrl?: string;
   senderId: string;
   timestamp: number;
   isSystem?: boolean;
-  type?: 'text' | 'image' | 'sticker' | 'call_log' | 'offer';
+  type?: 'text' | 'image' | 'sticker' | 'call_log' | 'offer' | 'audio';
   offerAmount?: number;
+  offerStatus?: 'pending' | 'accepted' | 'rejected';
 }
 
 export interface ChatSession {
